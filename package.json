@@ -1,0 +1,44 @@
+{
+  "name": "@inprod/run-changesets",
+  "version": "1.0.0-beta.1",
+  "description": "Run InProd changesets in CI/CD pipelines",
+  "main": "src/index.js",
+  "bin": {
+    "run-changesets": "src/index.js"
+  },
+  "scripts": {
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "inprod",
+    "genesys",
+    "genesys-cloud",
+    "gitlab",
+    "azure-devops",
+    "bitbucket",
+    "circleci",
+    "jenkins",
+    "ci",
+    "changesets"
+  ],
+  "license": "GPL-3.0",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "glob": "^10.0.0",
+    "js-yaml": "^4.1.1"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "jest": "^29.0.0"
+  },
+  "jest": {
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/_reference/"
+    ]
+  }
+}
