@@ -1,0 +1,13 @@
+node_modules/
+coverage/
+.env
+.idea/
+.vscode/
+_reference/
+test/
+templates/
+.claude/*
+full_test/*
+inprod-result.json
+inprod-results.env
+inprod.io-run-changesets-*

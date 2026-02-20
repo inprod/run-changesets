@@ -1,0 +1,14 @@
+_reference/
+test/
+templates/
+docs/
+.github/
+*.test.js
+.eslintrc*
+coverage/
+.gitignore
+.claude/*
+full_test/*
+inprod-result.json
+inprod-results.env
+
