@@ -31,6 +31,7 @@ Features:
 - Sequential multi-file execution with configurable failure handling
 - `validate_first` strategy: validate all files before executing any
 - Variable injection via `INPROD_CHANGESET_VARIABLES`
+- File uploads via `INPROD_FILES` (InProd's temp-file store, 24h signed URLs)
 - Output artifacts consumable by downstream jobs
 
 ---
@@ -63,6 +64,7 @@ All configuration is passed via environment variables. Variables can be set at t
 | `INPROD_EXECUTION_STRATEGY` | No | `"per_file"` | `"per_file"`: validate+execute each file in sequence. `"validate_first"`: validate all files, then execute all |
 | `INPROD_FAIL_FAST` | No | `"false"` | Stop processing on first failure when `"true"` |
 | `INPROD_CHANGESET_VARIABLES` | No | `""` | Newline-separated `KEY=VALUE` pairs to inject into changesets at runtime |
+| `INPROD_FILES` | No | `""` | Newline-separated `VARNAME=path` pairs. Each file is uploaded to InProd's temp-file store and the returned signed URL is injected as a changeset variable (see [File Uploads](#file-uploads)) |
 
 ### Boolean Variables
 
@@ -124,6 +126,50 @@ See your platform guide for how to pass multi-line values securely.
 
 ---
 
+## File Uploads
+
+Genesys Cloud file fields (`BowFileField`) need a URL the InProd server can fetch. If the file only
+exists in your repository — a prompt `.wav`, an MoH file, an image — use `INPROD_FILES` to have
+`run-changesets` upload it to InProd's ephemeral temp-file store and inject the returned signed URL
+as a changeset variable.
+
+**Format:** One `VARNAME=path` pair per line, mirroring `INPROD_CHANGESET_VARIABLES`. Blank lines
+and `#`-comments are ignored; paths are resolved relative to the working directory (repo root), the
+same as `INPROD_CHANGESET_FILE`.
+
+```
+MOH_URL=./assets/moh.wav
+PROMPT_AUDIO_URL=./assets/greeting.wav
+```
+
+Notes:
+
+- `VARNAME` must be ≤ 40 characters, a valid JavaScript identifier, and not a reserved word (or
+  `callback_url`) — invalid names fail before any upload.
+- `VARNAME` must not already exist as a **masked** variable anywhere in the changeset(s) being
+  processed. File-URL variables can never be masked (masked variables are stripped from the script
+  scope before the tag below is evaluated), so a name collision with an existing masked variable is
+  rejected up front with a clear error, rather than silently unmasked.
+- Every file is uploaded fresh on every run; the signed URL expires 24 hours after upload and is
+  never cached or reused across invocations.
+- Reference the variable in your changeset with the `[?? ?? ]` script tag, e.g.
+  `file_url: '[?? MOH_URL ??]'`. Confirm the exact field nesting for your model by exporting a
+  changeset that already has a file field.
+
+Example (GitLab CI):
+
+```yaml
+deploy-changesets:
+  script:
+    - export INPROD_FILES="MOH_URL=./assets/moh.wav"
+    - npx run-changesets
+  variables:
+    INPROD_BASE_URL: https://tenant1.inprod.io
+    # INPROD_API_KEY provided as a masked CI variable
+```
+
+---
+
 ## Debug Logging
 
 Set `INPROD_DEBUG=true` as an environment variable or pipeline variable to enable verbose debug output, including API request and response details.
@@ -144,6 +190,12 @@ Set `INPROD_DEBUG=true` as an environment variable or pipeline variable to enabl
 | `Changeset validation failed` | Changeset has validation errors | Review the validation errors in the job log |
 | `did not complete within N seconds` | Task polling timed out | Increase `INPROD_POLLING_TIMEOUT_MINUTES` |
 | `Invalid changeset_variables format` | A line in `INPROD_CHANGESET_VARIABLES` has no `=` | Ensure every non-comment line is `KEY=VALUE` |
+| `INPROD_FILES: malformed entry "..."` | A line isn't `VARNAME=path` | Ensure every non-comment line is `VARNAME=path` |
+| `INPROD_FILES: invalid variable name "..."` | Name is too long, not a valid identifier, or reserved | Use a short identifier-style name that isn't a JS reserved word or `callback_url` |
+| `INPROD_FILES: ... file not found` / `not readable` | Path is wrong or unreadable | Check the path is relative to the repo root and the file is committed and readable |
+| `INPROD_FILES: "..." is not a valid variable — it is already declared as masked in ...` | An `INPROD_FILES` name collides with an existing masked variable in the changeset | Rename the `INPROD_FILES` variable, or remove/unmask the conflicting declaration in the changeset |
+| `Temp-file upload failed: ... exceeds the server size limit` | File is larger than the server's max upload size | Reduce the file size or ask your InProd admin about `CHANGESET_TEMP_FILE_MAX_BYTES` |
+| `Temp-file upload failed for ...: HTTP ...` | Upload request failed (auth, 5xx, etc.) | Check `INPROD_API_KEY` and InProd service status |
 
 ---
 
@@ -174,7 +226,7 @@ To run tests with coverage:
 npm run test:coverage
 ```
 
-The test suite uses Jest with fake timers for polling tests. All 107 tests must pass before any changes are merged.
+The test suite uses Jest with fake timers for polling tests. All 137 tests must pass before any changes are merged.
 
 ### Linting
 
@@ -200,10 +252,11 @@ The package is a single Node.js script (`src/index.js`) that:
 
 1. Reads configuration from `INPROD_*` environment variables
 2. Resolves changeset files from the path or glob pattern in `INPROD_CHANGESET_FILE`
-3. For each file, optionally validates it against the InProd API, then executes it
-4. Polls the InProd task API until the task completes or times out
-5. Writes `inprod-results.env` and `inprod-result.json` with the aggregate and per-file results
-6. Exits with code `0` on success or `1` on any failure
+3. If `INPROD_FILES` is set, uploads each referenced file to InProd's temp-file store and merges the returned signed URLs into the changeset variable set
+4. For each file, optionally validates it against the InProd API, then executes it
+5. Polls the InProd task API until the task completes or times out
+6. Writes `inprod-results.env` and `inprod-result.json` with the aggregate and per-file results
+7. Exits with code `0` on success or `1` on any failure
 
 The package has no CI-platform-specific dependencies — it reads env vars, writes files, and exits, making it compatible with any CI system.
 

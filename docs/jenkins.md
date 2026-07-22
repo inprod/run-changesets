@@ -91,6 +91,7 @@ All configuration uses `INPROD_*` environment variables. Set them in the pipelin
 | `INPROD_EXECUTION_STRATEGY` | No | `"per_file"` | `"per_file"` or `"validate_first"` |
 | `INPROD_FAIL_FAST` | No | `"false"` | Stop on first failure |
 | `INPROD_CHANGESET_VARIABLES` | No | `""` | Newline-separated `KEY=VALUE` pairs to inject into changesets |
+| `INPROD_FILES` | No | `""` | Newline-separated `VARNAME=path` pairs. Each file is uploaded to InProd's temp-file store and the returned signed URL is injected as a changeset variable |
 
 ---
 
@@ -420,6 +421,37 @@ API_ENDPOINT=https://api.example.com"
 
 ---
 
+## File Uploads
+
+Genesys Cloud file fields (`BowFileField`) need a URL the InProd server can fetch. If the file only
+exists in your repository — a prompt `.wav`, an MoH file, an image — use `INPROD_FILES` to have
+`run-changesets` upload it to InProd's ephemeral temp-file store and inject the returned signed URL
+as a changeset variable.
+
+```groovy
+stages {
+    stage('Deploy') {
+        steps {
+            sh '''
+                export INPROD_FILES="MOH_URL=./assets/moh.wav
+PROMPT_AUDIO_URL=./assets/greeting.wav"
+                npx --yes @inprod.io/run-changesets
+            '''
+        }
+    }
+}
+```
+
+**Format:** One `VARNAME=path` pair per line, mirroring `INPROD_CHANGESET_VARIABLES`. Blank lines
+and `#`-comments are ignored; paths are resolved relative to the workspace root. `VARNAME` must be
+≤ 40 characters, a valid JavaScript identifier, not a reserved word or `callback_url`, and must not
+already exist as a masked variable in the changeset — invalid names or masked-name collisions fail
+before any upload. Every file is uploaded fresh on every run; the signed URL expires 24 hours after
+upload and is never cached or reused. Reference the variable in your changeset with the `[?? ?? ]`
+script tag, e.g. `file_url: '[?? MOH_URL ??]'`.
+
+---
+
 ## Debug Logging
 
 Set `INPROD_DEBUG=true` to enable verbose output including API request and response details:
@@ -450,6 +482,12 @@ environment {
 | `Changeset validation failed` | Changeset has validation errors | Review the validation errors in the stage log |
 | `did not complete within N seconds` | Task polling timed out | Increase `INPROD_POLLING_TIMEOUT_MINUTES` |
 | `Invalid changeset_variables format` | A line in `INPROD_CHANGESET_VARIABLES` has no `=` | Ensure every non-comment line is `KEY=VALUE` |
+| `INPROD_FILES: malformed entry "..."` | A line isn't `VARNAME=path` | Ensure every non-comment line is `VARNAME=path` |
+| `INPROD_FILES: invalid variable name "..."` | Name is too long, not a valid identifier, or reserved | Use a short identifier-style name that isn't a JS reserved word or `callback_url` |
+| `INPROD_FILES: ... file not found` / `not readable` | Path is wrong or unreadable | Check the path is relative to the workspace root and the file is committed and readable |
+| `INPROD_FILES: "..." is not a valid variable — it is already declared as masked in ...` | An `INPROD_FILES` name collides with an existing masked variable in the changeset | Rename the `INPROD_FILES` variable, or remove/unmask the conflicting declaration |
+| `Temp-file upload failed: ... exceeds the server size limit` | File is larger than the server's max upload size | Reduce the file size or ask your InProd admin about `CHANGESET_TEMP_FILE_MAX_BYTES` |
+| `Temp-file upload failed for ...: HTTP ...` | Upload request failed (auth, 5xx, etc.) | Check `INPROD_API_KEY` and InProd service status |
 | `npx: command not found` | Node.js not on agent PATH | Install the NodeJS plugin and configure a Node.js tool, or use a Docker agent |
 | Credentials appear empty | Secret not of type `Secret text` | Use **Secret text** credential type in Jenkins Credentials store |
 | `archiveArtifacts` finds no files | Package exited before writing outputs | Check for earlier errors in the stage log; add `allowEmptyArchive: true` to prevent pipeline failure |

@@ -321,6 +321,31 @@ steps:
 
 ---
 
+## File Uploads
+
+Genesys Cloud file fields (`BowFileField`) need a URL the InProd server can fetch. If the file only
+exists in your repository — a prompt `.wav`, an MoH file, an image — use `INPROD_FILES` to have
+`run-changesets` upload it to InProd's ephemeral temp-file store and inject the returned signed URL
+as a changeset variable. Set it as a pipeline variable, the same way as `INPROD_DEBUG` below — the
+package reads `INPROD_FILES` from the environment automatically:
+
+```yaml
+variables:
+  INPROD_FILES: |
+    MOH_URL=./assets/moh.wav
+    PROMPT_AUDIO_URL=./assets/greeting.wav
+```
+
+**Format:** One `VARNAME=path` pair per line, mirroring `INPROD_CHANGESET_VARIABLES`. Blank lines
+and `#`-comments are ignored; paths are resolved relative to the repo root. `VARNAME` must be ≤ 40
+characters, a valid JavaScript identifier, not a reserved word or `callback_url`, and must not
+already exist as a masked variable in the changeset — invalid names or masked-name collisions fail
+before any upload. Every file is uploaded fresh on every run; the signed URL expires 24 hours after
+upload and is never cached or reused. Reference the variable in your changeset with the `[?? ?? ]`
+script tag, e.g. `file_url: '[?? MOH_URL ??]'`.
+
+---
+
 ## Debug Logging
 
 Set `INPROD_DEBUG` to `'true'` as a pipeline variable to enable verbose debug output, including API request/response details:
@@ -348,6 +373,12 @@ Or add it directly to the step template's env block by setting it as a pipeline 
 | `Changeset validation failed` | Changeset has validation errors | Review the validation errors in the job log |
 | `did not complete within N seconds` | Task polling timed out | Increase `pollingTimeoutMinutes` |
 | `Invalid changeset_variables format` | A line in `changesetVariables` has no `=` | Ensure every non-comment line is `KEY=VALUE` |
+| `INPROD_FILES: malformed entry "..."` | A line isn't `VARNAME=path` | Ensure every non-comment line is `VARNAME=path` |
+| `INPROD_FILES: invalid variable name "..."` | Name is too long, not a valid identifier, or reserved | Use a short identifier-style name that isn't a JS reserved word or `callback_url` |
+| `INPROD_FILES: ... file not found` / `not readable` | Path is wrong or unreadable | Check the path is relative to the repo root and the file is committed and readable |
+| `INPROD_FILES: "..." is not a valid variable — it is already declared as masked in ...` | An `INPROD_FILES` name collides with an existing masked variable in the changeset | Rename the `INPROD_FILES` variable, or remove/unmask the conflicting declaration |
+| `Temp-file upload failed: ... exceeds the server size limit` | File is larger than the server's max upload size | Reduce the file size or ask your InProd admin about `CHANGESET_TEMP_FILE_MAX_BYTES` |
+| `Temp-file upload failed for ...: HTTP ...` | Upload request failed (auth, 5xx, etc.) | Check `INPROD_API_KEY` and InProd service status |
 | Secret variables appear empty in scripts | Azure does not auto-pass secrets | The template handles this — ensure variables are defined at the pipeline or library level, not hard-coded in YAML |
 | `Node.js not found` on self-hosted agents | Node is not pre-installed | Either install Node on the agent, or the `NodeTool@0` step will install it if the agent has internet access |
 | Cross-job output variable is empty | Job name or step name mismatch | Use exact job name and `PublishStatus.INPROD_STATUS` — the step is always named `PublishStatus` |

@@ -14,7 +14,11 @@ let mockConsoleError;
 let mockConsoleWarn;
 let mockFsWriteFileSync;
 
-const { run, pollTask, buildUrl, isGlobPattern, resolveFiles, worstStatus, getFileFormat, injectYamlVariables, injectJsonVariables } = require('./index');
+const {
+  run, pollTask, buildUrl, isGlobPattern, resolveFiles, worstStatus, getFileFormat,
+  injectYamlVariables, injectJsonVariables,
+  parseInprodFiles, assertValidVariableName, uploadTempFile, uploadInprodFiles,
+} = require('./index');
 
 // ── Environment variable mapping ─────────────────────────────────────────────
 
@@ -23,6 +27,7 @@ const ALL_ENV_VARS = [
   'INPROD_ENVIRONMENT', 'INPROD_VALIDATE_BEFORE_EXECUTE', 'INPROD_VALIDATE_ONLY',
   'INPROD_POLLING_TIMEOUT_MINUTES', 'INPROD_EXECUTION_STRATEGY',
   'INPROD_FAIL_FAST', 'INPROD_CHANGESET_VARIABLES', 'INPROD_DEBUG',
+  'INPROD_FILES',
 ];
 
 const INPUT_TO_ENV = {
@@ -36,6 +41,7 @@ const INPUT_TO_ENV = {
   execution_strategy: 'INPROD_EXECUTION_STRATEGY',
   fail_fast: 'INPROD_FAIL_FAST',
   changeset_variables: 'INPROD_CHANGESET_VARIABLES',
+  files: 'INPROD_FILES',
 };
 
 function mockInputs(inputs) {
@@ -146,6 +152,20 @@ const GLOB_FILE_01 = path.join(__dirname, '__test_01_queues__.yaml');
 const GLOB_FILE_02 = path.join(__dirname, '__test_02_flows__.yaml');
 const GLOB_FILE_03 = path.join(__dirname, '__test_03_webchat__.yaml');
 
+// Fixture file for INPROD_FILES upload tests
+const UPLOAD_FIXTURE_FILE = path.join(__dirname, '__test_upload_fixture__.wav');
+
+// Changeset fixture with a pre-existing masked variable, for the masked-conflict test
+const MASKED_CHANGESET_FILE = path.join(__dirname, '__test_masked_moh__.yaml');
+const MASKED_CHANGESET = `name: Test Queue
+environment: Development
+variable:
+- environment: null
+  mask_value: true
+  name: MOH_URL
+  value: placeholder
+action: []`;
+
 // Helper to build expected result array for a single file
 function singleExpectedResult(status, result, error = null) {
   return [{
@@ -161,10 +181,12 @@ beforeAll(() => {
   fs.writeFileSync(GLOB_FILE_01, SAMPLE_CHANGESET);
   fs.writeFileSync(GLOB_FILE_02, SAMPLE_CHANGESET);
   fs.writeFileSync(GLOB_FILE_03, SAMPLE_CHANGESET);
+  fs.writeFileSync(UPLOAD_FIXTURE_FILE, Buffer.from('fake-audio-bytes'));
+  fs.writeFileSync(MASKED_CHANGESET_FILE, MASKED_CHANGESET);
 });
 
 afterAll(() => {
-  [SAMPLE_CHANGESET_FILE, GLOB_FILE_01, GLOB_FILE_02, GLOB_FILE_03].forEach(f => {
+  [SAMPLE_CHANGESET_FILE, GLOB_FILE_01, GLOB_FILE_02, GLOB_FILE_03, UPLOAD_FIXTURE_FILE, MASKED_CHANGESET_FILE].forEach(f => {
     if (fs.existsSync(f)) fs.unlinkSync(f);
   });
 });
@@ -1592,6 +1614,175 @@ describe('run — changeset variables', () => {
   });
 });
 
+// ─── run() — INPROD_FILES ──────────────────────────────────────────────────────
+//
+// NOTE: INPROD_VALIDATE_BEFORE_EXECUTE defaults to true, meaning the default per_file
+// strategy calls validateFile (its own POST to validate_yaml + its own poll) BEFORE
+// executeFile (POST to execute_yaml + poll). Every test below pins
+// validate_before_execute: 'false' so it only exercises the new upload behavior plus a
+// single execute+poll round trip, matching how 'run — changeset variables' above does
+// the same thing via baseInputs.
+
+describe('run — INPROD_FILES', () => {
+  const baseInputs = {
+    api_key: 'key',
+    base_url: 'https://test.inprod.io',
+    changeset_file: SAMPLE_CHANGESET_FILE,
+    validate_before_execute: 'false',
+  };
+
+  test('uploads file, injects unmasked URL variable, then executes', async () => {
+    mockInputs({ ...baseInputs, files: `MOH_URL=${UPLOAD_FIXTURE_FILE}` });
+
+    mockFetch
+      .mockResolvedValueOnce(mockFetchResponse(201, {
+        url: 'https://signed.example.com/moh.wav',
+        file_name: 'moh.wav',
+        expires_at: '2026-07-21T00:00:00Z',
+      }))
+      .mockResolvedValueOnce(mockFetchResponse(200, executeTaskResponse()))
+      .mockResolvedValueOnce(mockFetchResponse(200, successPollResponse({})));
+
+    const promise = run();
+    await jest.advanceTimersByTimeAsync(5000);
+    await promise;
+
+    expect(mockFetch).toHaveBeenCalledTimes(3); // upload + execute POST + poll — no validate step
+    const executeCall = mockFetch.mock.calls.find(call => String(call[0]).includes('execute_yaml'));
+    expect(executeCall[1].body).toContain('name: MOH_URL');
+    expect(executeCall[1].body).toContain('value: https://signed.example.com/moh.wav');
+    expect(executeCall[1].body).toContain('mask_value: false');
+    expect(getWrittenStatus()).toBe('SUCCESS');
+
+    // At default verbosity (INPROD_DEBUG unset), the signed URL must never appear in
+    // console output — only in the outbound HTTP request body, which is expected.
+    const allLoggedText = [
+      ...mockConsoleLog.mock.calls, ...mockConsoleError.mock.calls, ...mockConsoleWarn.mock.calls,
+    ].flat().map(String).join('\n');
+    expect(allLoggedText).not.toContain('https://signed.example.com/moh.wav');
+  });
+
+  test('rejects with zero HTTP calls when the changeset already declares that name as masked', async () => {
+    mockInputs({ ...baseInputs, changeset_file: MASKED_CHANGESET_FILE, files: `MOH_URL=${UPLOAD_FIXTURE_FILE}` });
+
+    await run();
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockConsoleError).toHaveBeenCalledWith(
+      expect.stringContaining('is not a valid variable')
+    );
+    expect(mockConsoleError).toHaveBeenCalledWith(
+      expect.stringContaining('already declared as masked')
+    );
+  });
+
+  test('missing file fails fast with zero HTTP calls', async () => {
+    mockInputs({ ...baseInputs, files: 'MOH_URL=./does/not/exist.wav' });
+
+    await run();
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockConsoleError).toHaveBeenCalledWith(
+      expect.stringContaining('INPROD_FILES: MOH_URL')
+    );
+    expect(mockConsoleError).toHaveBeenCalledWith(
+      expect.stringContaining('file not found')
+    );
+  });
+
+  test('invalid variable name fails fast with zero HTTP calls', async () => {
+    mockInputs({ ...baseInputs, files: `class=${UPLOAD_FIXTURE_FILE}` });
+
+    await run();
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockConsoleError).toHaveBeenCalledWith(
+      expect.stringContaining('invalid variable name')
+    );
+  });
+
+  test('malformed entry fails fast with zero HTTP calls', async () => {
+    mockInputs({ ...baseInputs, files: 'NOT_A_VALID_ENTRY' });
+
+    await run();
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockConsoleError).toHaveBeenCalledWith(
+      expect.stringContaining('malformed entry')
+    );
+  });
+
+  test('413 upload response aborts before execute is attempted', async () => {
+    mockInputs({ ...baseInputs, files: `MOH_URL=${UPLOAD_FIXTURE_FILE}` });
+    mockFetch.mockResolvedValueOnce(mockFetchResponse(413, { errors: { base: ['File exceeds maximum size.'] } }, false));
+
+    await run();
+
+    expect(mockFetch).toHaveBeenCalledTimes(1); // only the failed upload — execute never attempted
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockConsoleError).toHaveBeenCalledWith(
+      expect.stringContaining('exceeds the server size limit')
+    );
+  });
+
+  test('network error during upload aborts before execute is attempted', async () => {
+    mockInputs({ ...baseInputs, files: `MOH_URL=${UPLOAD_FIXTURE_FILE}` });
+    mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+    await run();
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockExit).toHaveBeenCalledWith(1);
+    expect(mockConsoleError).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to connect to InProd API')
+    );
+  });
+
+  test('INPROD_FILES unset is a byte-identical no-op (regression guard)', async () => {
+    mockInputs(baseInputs); // no `files` key — matches a pre-feature baseline run
+
+    mockFetch
+      .mockResolvedValueOnce(mockFetchResponse(200, executeTaskResponse()))
+      .mockResolvedValueOnce(mockFetchResponse(200, successPollResponse({})));
+
+    const promise = run();
+    await jest.advanceTimersByTimeAsync(5000);
+    await promise;
+
+    expect(mockFetch).toHaveBeenCalledTimes(2); // execute + poll only, no upload call
+    expect(getWrittenStatus()).toBe('SUCCESS');
+  });
+
+  test('never logs the signed URL, at default verbosity or with INPROD_DEBUG=true', async () => {
+    mockInputs({ ...baseInputs, files: `MOH_URL=${UPLOAD_FIXTURE_FILE}` });
+    process.env.INPROD_DEBUG = 'true';
+
+    mockFetch
+      .mockResolvedValueOnce(mockFetchResponse(201, {
+        url: 'https://signed.example.com/super-secret-path',
+        file_name: 'moh.wav',
+        expires_at: '2026-07-21T00:00:00Z',
+      }))
+      .mockResolvedValueOnce(mockFetchResponse(200, executeTaskResponse()))
+      .mockResolvedValueOnce(mockFetchResponse(200, successPollResponse({})));
+
+    const promise = run();
+    await jest.advanceTimersByTimeAsync(5000);
+    await promise;
+
+    const allLoggedText = [
+      ...mockConsoleLog.mock.calls, ...mockConsoleError.mock.calls, ...mockConsoleWarn.mock.calls,
+    ].flat().map(String).join('\n');
+    expect(allLoggedText).not.toContain('https://signed.example.com/super-secret-path');
+
+    delete process.env.INPROD_DEBUG;
+  });
+});
+
 // ─── getFileFormat ────────────────────────────────────────────────────────────
 
 describe('getFileFormat', () => {
@@ -1890,5 +2081,152 @@ describe('injectJsonVariables', () => {
     const result = JSON.parse(injectJsonVariables(baseJson, { NEW_VAR: 'val' }));
     expect(result.name).toBe('Test Queue');
     expect(result.action).toEqual([{ action: 'gencloud-create' }]);
+  });
+});
+
+// ─── parseInprodFiles ───────────────────────────────────────────────────────────
+
+describe('parseInprodFiles', () => {
+  test('parses multiple VARNAME=path lines', () => {
+    expect(parseInprodFiles('MOH_URL=./assets/moh.wav\nGREETING_URL=./assets/greeting.wav')).toEqual([
+      { name: 'MOH_URL', path: './assets/moh.wav' },
+      { name: 'GREETING_URL', path: './assets/greeting.wav' },
+    ]);
+  });
+
+  test('ignores blank lines and comments', () => {
+    expect(parseInprodFiles('\nMOH_URL=./assets/moh.wav\n\n# a comment\n'))
+      .toEqual([{ name: 'MOH_URL', path: './assets/moh.wav' }]);
+  });
+
+  test('splits on the first = only, preserving = in the path', () => {
+    expect(parseInprodFiles('MOH_URL=./assets/moh?sig=abc=def.wav'))
+      .toEqual([{ name: 'MOH_URL', path: './assets/moh?sig=abc=def.wav' }]);
+  });
+
+  test('trims whitespace from name and path', () => {
+    expect(parseInprodFiles('  MOH_URL  =  ./assets/moh.wav  '))
+      .toEqual([{ name: 'MOH_URL', path: './assets/moh.wav' }]);
+  });
+
+  test('throws on a malformed entry with no =', () => {
+    expect(() => parseInprodFiles('MOH_URL')).toThrow(/malformed entry/);
+  });
+
+  test('throws on an entry with = at index 0 (empty name)', () => {
+    expect(() => parseInprodFiles('=./assets/moh.wav')).toThrow(/malformed entry/);
+  });
+
+  test('throws on an entry with an empty path after =', () => {
+    expect(() => parseInprodFiles('MOH_URL=')).toThrow(/malformed entry/);
+  });
+
+  test('returns [] for empty/unset input', () => {
+    expect(parseInprodFiles('')).toEqual([]);
+    expect(parseInprodFiles('   \n  ')).toEqual([]);
+    expect(parseInprodFiles(undefined)).toEqual([]);
+  });
+});
+
+// ─── assertValidVariableName ─────────────────────────────────────────────────────
+
+describe('assertValidVariableName', () => {
+  test('accepts a valid name', () => {
+    expect(() => assertValidVariableName('MOH_URL')).not.toThrow();
+    expect(() => assertValidVariableName('_leadingUnderscore')).not.toThrow();
+  });
+
+  test('rejects an empty name', () => {
+    expect(() => assertValidVariableName('')).toThrow(/must not be empty/);
+  });
+
+  test('rejects names over 40 characters', () => {
+    expect(() => assertValidVariableName('A'.repeat(41))).toThrow(/40 characters/);
+  });
+
+  test('accepts a name that is exactly 40 characters', () => {
+    expect(() => assertValidVariableName('A'.repeat(40))).not.toThrow();
+  });
+
+  test('rejects invalid identifiers', () => {
+    expect(() => assertValidVariableName('1BAD')).toThrow(/must start with/);
+    expect(() => assertValidVariableName('BAD-NAME')).toThrow(/must start with/);
+    expect(() => assertValidVariableName('BAD$NAME')).toThrow(/must start with/);
+  });
+
+  test('rejects JS reserved words', () => {
+    expect(() => assertValidVariableName('class')).toThrow(/reserved JavaScript word/);
+    expect(() => assertValidVariableName('return')).toThrow(/reserved JavaScript word/);
+    expect(() => assertValidVariableName('null')).toThrow(/reserved JavaScript word/);
+  });
+
+  test('rejects callback_url', () => {
+    expect(() => assertValidVariableName('callback_url')).toThrow(/reserved by InProd/);
+  });
+});
+
+// ─── uploadTempFile / uploadInprodFiles ──────────────────────────────────────────
+
+describe('uploadTempFile', () => {
+  test('posts multipart with Authorization header and field name "file"', async () => {
+    mockFetch.mockResolvedValueOnce(mockFetchResponse(201, {
+      url: 'https://storage.example.com/signed-url',
+      file_name: 'sample.wav',
+      expires_at: '2026-07-21T00:00:00Z',
+    }));
+
+    const result = await uploadTempFile(UPLOAD_FIXTURE_FILE, 'https://tenant1.inprod.io', 'test-key');
+
+    const [calledUrl, callArgs] = mockFetch.mock.calls[0];
+    expect(calledUrl).toBe('https://tenant1.inprod.io/api/v1/change-set/temp-file/');
+    expect(callArgs.method).toBe('POST');
+    expect(callArgs.headers).toEqual({ 'Authorization': 'Api-Key test-key' });
+    expect(callArgs.body.get('file')).toBeTruthy();
+    expect(result.url).toBe('https://storage.example.com/signed-url');
+  });
+
+  test('413 response surfaces a size-limit error', async () => {
+    mockFetch.mockResolvedValueOnce(mockFetchResponse(413, { errors: { base: ['File exceeds maximum size.'] } }, false));
+    await expect(uploadTempFile(UPLOAD_FIXTURE_FILE, 'https://tenant1.inprod.io', 'test-key'))
+      .rejects.toThrow(/exceeds the server size limit/);
+  });
+
+  test('other non-ok response surfaces a generic upload-failed error', async () => {
+    mockFetch.mockResolvedValueOnce(mockFetchResponse(500, 'Internal Server Error', false));
+    await expect(uploadTempFile(UPLOAD_FIXTURE_FILE, 'https://tenant1.inprod.io', 'test-key'))
+      .rejects.toThrow(/Temp-file upload failed for/);
+  });
+
+  test('network error is wrapped with a connection-failure message', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    await expect(uploadTempFile(UPLOAD_FIXTURE_FILE, 'https://tenant1.inprod.io', 'test-key'))
+      .rejects.toThrow(/Failed to connect to InProd API/);
+  });
+});
+
+describe('uploadInprodFiles', () => {
+  test('uploads each entry and returns a VARNAME -> url map', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockFetchResponse(201, { url: 'https://storage.example.com/1', file_name: 'a.wav', expires_at: '2026-07-21T00:00:00Z' }))
+      .mockResolvedValueOnce(mockFetchResponse(201, { url: 'https://storage.example.com/2', file_name: 'b.wav', expires_at: '2026-07-21T00:00:00Z' }));
+
+    const result = await uploadInprodFiles([
+      { name: 'VAR_A', path: UPLOAD_FIXTURE_FILE },
+      { name: 'VAR_B', path: UPLOAD_FIXTURE_FILE },
+    ], 'https://tenant1.inprod.io', 'test-key');
+
+    expect(result).toEqual({ VAR_A: 'https://storage.example.com/1', VAR_B: 'https://storage.example.com/2' });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  test('throws immediately on the first failure without uploading remaining entries', async () => {
+    mockFetch.mockResolvedValueOnce(mockFetchResponse(413, { errors: { base: ['File exceeds maximum size.'] } }, false));
+
+    await expect(uploadInprodFiles([
+      { name: 'VAR_A', path: UPLOAD_FIXTURE_FILE },
+      { name: 'VAR_B', path: UPLOAD_FIXTURE_FILE },
+    ], 'https://tenant1.inprod.io', 'test-key')).rejects.toThrow(/exceeds the server size limit/);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
