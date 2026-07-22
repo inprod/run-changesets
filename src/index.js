@@ -145,6 +145,119 @@ function injectJsonVariables(content, changesetVariables) {
   return JSON.stringify(doc, null, 2);
 }
 
+// ── INPROD_FILES: temp-file upload support ────────────────────────────────────
+
+// Exact list from inprod-bow/src/changeset/utils/native2gcfg.py:30-36 (BAD_VARIABLES)
+const BAD_VARIABLES = new Set([
+  'break', 'case', 'catch', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'finally', 'for',
+  'function', 'if', 'in', 'instanceof', 'new', 'return', 'switch', 'this', 'throw', 'try', 'typeof',
+  'var', 'void', 'while', 'with', 'class', 'const', 'enum', 'export', 'extends', 'import', 'super',
+  'implements', 'interface', 'let', 'package', 'private', 'protected', 'public', 'static',
+  'yield', 'null', 'true', 'false', 'NaN', 'Infinity', 'undefined', 'int', 'byte', 'char',
+  'goto', 'long', 'final', 'float', 'short', 'double', 'native', 'throws', 'boolean', 'abstract',
+  'volatile', 'transient', 'synchronized',
+]);
+
+// Exact set from inprod-bow/src/changeset/models.py:237 (ChangeSet.RESERVED_VARIABLE_NAMES)
+const RESERVED_VARIABLE_NAMES = new Set(['callback_url']);
+
+// Exact regex from inprod-bow/src/changeset/utils/native2gcfg.py:1857 (test_variable_name)
+const VALID_VARIABLE_NAME_RE = /^[A-Za-z_]\w*$/;
+
+function assertValidVariableName(name) {
+  if (!name) {
+    throw new Error(`INPROD_FILES: invalid variable name "${name}" (must not be empty)`);
+  }
+  if (name.length > 40) {
+    throw new Error(`INPROD_FILES: invalid variable name "${name}" (must be 40 characters or fewer)`);
+  }
+  if (!VALID_VARIABLE_NAME_RE.test(name)) {
+    throw new Error(`INPROD_FILES: invalid variable name "${name}" (must start with a letter or underscore, followed by letters, digits, or underscores)`);
+  }
+  if (BAD_VARIABLES.has(name)) {
+    throw new Error(`INPROD_FILES: invalid variable name "${name}" (is a reserved JavaScript word)`);
+  }
+  if (RESERVED_VARIABLE_NAMES.has(name)) {
+    throw new Error(`INPROD_FILES: invalid variable name "${name}" ("${name}" is reserved by InProd)`);
+  }
+}
+
+function parseInprodFiles(input) {
+  const trimmedInput = (input || '').trim();
+  if (!trimmedInput) return [];
+
+  const parsed = [];
+  const lines = trimmedInput.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const eq = trimmed.indexOf('=');
+    if (eq < 1) {
+      throw new Error(`INPROD_FILES: malformed entry "${trimmed}" (expected VARNAME=path)`);
+    }
+    const name = trimmed.slice(0, eq).trim();
+    const filePath = trimmed.slice(eq + 1).trim();
+    if (!filePath) {
+      throw new Error(`INPROD_FILES: malformed entry "${trimmed}" (expected VARNAME=path)`);
+    }
+    parsed.push({ name, path: filePath });
+  }
+  return parsed;
+}
+
+async function uploadTempFile(filePath, baseUrl, apiKey) {
+  const endpoint = `${baseUrl}/api/v1/change-set/temp-file/`;
+  const fileName = path.basename(filePath);
+
+  const buffer = fs.readFileSync(filePath);
+  const form = new FormData();
+  form.append('file', new Blob([buffer]), fileName);
+
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Api-Key ${apiKey}`
+      },
+      body: form
+    });
+  } catch (error) {
+    logError(`Network error connecting to InProd API: ${error.message}`);
+    debug(`Full error details: ${error.stack}`);
+    throw new Error(`Failed to connect to InProd API at ${endpoint}: ${error.message}`);
+  }
+
+  if (response.status === 413) {
+    throw new Error(`Temp-file upload failed: ${fileName} (${filePath}) exceeds the server size limit`);
+  }
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Temp-file upload failed for ${fileName}: HTTP ${response.status} ${errorBody || response.statusText}`);
+  }
+
+  const data = await response.json();
+  // Never log `data.url` — it's a 24h bearer credential (see changeset-temp-file-requirements.md §6).
+  // file_name/expires_at are safe to log even in debug mode.
+  debug(`Temp-file upload succeeded: file_name=${data.file_name}, expires_at=${data.expires_at}`);
+  return data;
+}
+
+async function uploadInprodFiles(resolvedFiles, baseUrl, apiKey) {
+  const vars = {};
+  info(`Uploading ${resolvedFiles.length} file(s) to InProd temp-file store...`);
+
+  for (const { name, path: filePath } of resolvedFiles) {
+    const result = await uploadTempFile(filePath, baseUrl, apiKey);
+    info(`  Uploaded: ${result.file_name} → ${name}`);
+    vars[name] = result.url;
+  }
+
+  return vars;
+}
+
 // ── File format detection ─────────────────────────────────────────────────────
 
 function getFileFormat(filePath) {
@@ -431,6 +544,7 @@ async function run() {
     const executionStrategy = (process.env.INPROD_EXECUTION_STRATEGY || 'per_file').trim();
     const failFast = (process.env.INPROD_FAIL_FAST || 'false') === 'true';
     const changesetVariablesInput = process.env.INPROD_CHANGESET_VARIABLES || '';
+    const inprodFilesInput = process.env.INPROD_FILES || '';
 
     // Parse changeset variables from KEY=VALUE format
     let changesetVariables = null;
@@ -449,6 +563,9 @@ async function run() {
       debug(`Parsed changeset variables: ${JSON.stringify(Object.keys(changesetVariables))} (values masked)`);
     }
 
+    // Parse INPROD_FILES (pure — no filesystem/network access yet)
+    const parsedInprodFiles = parseInprodFiles(inprodFilesInput);
+
     // Validate required inputs
     if (!apiKey) {
       throw new Error('api_key is required and cannot be empty');
@@ -464,8 +581,59 @@ async function run() {
       throw new Error(`Invalid base_url format: ${baseUrl}`);
     }
 
+    // Resolve every INPROD_FILES path once (absolute, relative to cwd — same convention
+    // as resolveFiles()), then validate before any HTTP call. The resolved path is reused
+    // for the upload itself so a later upload-error message can never disagree with the
+    // "file not found"/"not readable" message for the same file.
+    const resolvedInprodFiles = parsedInprodFiles.map(({ name, path: rawPath }) => ({
+      name,
+      path: path.resolve(rawPath),
+    }));
+    const fileVarNames = new Set();
+    for (const { name, path: resolvedPath } of resolvedInprodFiles) {
+      assertValidVariableName(name);
+      if (!fs.existsSync(resolvedPath)) {
+        throw new Error(`INPROD_FILES: ${name} → file not found: ${resolvedPath}`);
+      }
+      try {
+        fs.accessSync(resolvedPath, fs.constants.R_OK);
+      } catch (e) {
+        throw new Error(`INPROD_FILES: ${name} → file not readable: ${resolvedPath}`);
+      }
+      fileVarNames.add(name);
+    }
+
     // Resolve changeset files (also validates changeset_file is provided)
     const filePaths = resolveFiles(changesetFile);
+
+    // Reject INPROD_FILES names that collide with an already-masked variable in any
+    // changeset file about to be processed. File-URL variables can never work while
+    // masked (stripped from the JS scope before [?? ?? ] is evaluated server-side), so
+    // this fails fast with a clear message instead of silently overriding. Still zero
+    // HTTP calls at this point. Spans every resolved file (glob-aware) since
+    // changesetVariables is injected uniformly into all of them.
+    if (fileVarNames.size > 0) {
+      for (const fp of filePaths) {
+        const content = fs.readFileSync(fp, 'utf8');
+        const format = getFileFormat(fp);
+        const doc = format === 'json' ? JSON.parse(content) : yaml.load(content);
+        const existingVars = Array.isArray(doc.variable) ? doc.variable : [];
+        for (const v of existingVars) {
+          if (fileVarNames.has(v.name) && v.mask_value === true) {
+            throw new Error(
+              `INPROD_FILES: "${v.name}" is not a valid variable — it is already declared as masked in ${path.basename(fp)}`
+            );
+          }
+        }
+      }
+    }
+
+    // Upload INPROD_FILES and merge the returned signed URLs into changesetVariables.
+    // Always re-uploaded on every invocation — signed URLs are never cached/reused.
+    if (parsedInprodFiles.length > 0) {
+      const uploadedVars = await uploadInprodFiles(resolvedInprodFiles, baseUrl, apiKey);
+      changesetVariables = { ...(changesetVariables || {}), ...uploadedVars };
+    }
 
     const options = {
       apiKey, baseUrl, environment, validateBeforeExecute, validateOnly,
@@ -485,6 +653,9 @@ async function run() {
     info(`Polling timeout: ${pollingTimeoutMinutes} minutes (${pollingTimeoutSeconds} seconds)`);
     if (changesetVariables) {
       info(`Changeset variables: ${Object.keys(changesetVariables).length} variable(s) provided`);
+    }
+    if (parsedInprodFiles.length > 0) {
+      info(`Files to upload: ${parsedInprodFiles.length} file(s) via INPROD_FILES`);
     }
 
     const results = [];
@@ -609,7 +780,11 @@ async function run() {
   }
 }
 
-module.exports = { run, pollTask, buildUrl, isGlobPattern, resolveFiles, worstStatus, getFileFormat, injectYamlVariables, injectJsonVariables };
+module.exports = {
+  run, pollTask, buildUrl, isGlobPattern, resolveFiles, worstStatus, getFileFormat,
+  injectYamlVariables, injectJsonVariables,
+  parseInprodFiles, assertValidVariableName, uploadTempFile, uploadInprodFiles,
+};
 
 /* istanbul ignore next */
 if (require.main === module) {
