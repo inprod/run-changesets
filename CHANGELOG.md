@@ -2,6 +2,19 @@
 
 All notable changes to `@inprod.io/run-changesets` will be documented in this file.
 
+## [1.1.0] - 2026-07-23
+
+### Added
+
+- `INPROD_FILES` — upload files to InProd's temporary storage before validation/execution, in
+  `VARNAME=path` format (one per line, same conventions as `INPROD_CHANGESET_VARIABLES`). Each
+  uploaded file's signed URL is merged into the changeset variables under the given name, so a
+  changeset can reference file contents (certificates, config bundles, etc.) via `[?? VARNAME ??]`
+  placeholders without embedding them directly in the changeset or in `INPROD_CHANGESET_VARIABLES`.
+  Uploaded URLs are always re-uploaded on every run (never cached/reused) and are never logged.
+- Platform doc updates for `INPROD_FILES` in `docs/azure.md`, `docs/bitbucket.md`,
+  `docs/circleci.md`, `docs/jenkins.md`, and `README.md`.
+
 ## [1.0.0] - 2026-02-18
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "@inprod.io/run-changesets",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Run InProd changesets in CI/CD pipelines",
   "main": "src/index.js",
   "bin": {
