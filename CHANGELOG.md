@@ -14,6 +14,30 @@ All notable changes to `@inprod.io/run-changesets` will be documented in this fi
   Uploaded URLs are always re-uploaded on every run (never cached/reused) and are never logged.
 - Platform doc updates for `INPROD_FILES` in `docs/azure.md`, `docs/bitbucket.md`,
   `docs/circleci.md`, `docs/jenkins.md`, and `README.md`.
+- `LICENSE` file containing the GPL-3.0 text, which was previously absent despite the declared
+  license.
+- Tag-triggered publish workflow that lints, tests, verifies the tag matches `package.json`, and
+  publishes with provenance.
+- `INPROD_DEBUG` documented in the environment variable reference, including its strict
+  `=== 'true'` check.
+
+### Fixed
+
+- Platform guide links in `README.md` are now absolute repository URLs. Relative paths 404 when the
+  README is rendered on npmjs.com. The GitLab row now points at the `gitlab-run-changesets`
+  project; `docs/gitlab.md` never existed.
+- `templates/` is no longer gitignored. The Azure step template was untracked, so both Quick Start
+  options in `docs/azure.md` referenced a file absent from the repository.
+- Azure guide examples pin `v1.1.0`; the previously referenced `v1.0.0` tag was never created.
+- The "Learn more" line in `README.md` no longer renders as an H2 heading.
+
+### Changed
+
+- Publishing now uses a `files` allowlist in `package.json` instead of `.npmignore`. The denylist
+  was leaking the previous release tarball and stray tool output into the published package.
+- Added `repository`, `homepage`, `bugs`, and `publishConfig.access` to `package.json`.
+- Environment variable and troubleshooting tables duplicated across the four platform guides are
+  now links to the `README.md` reference, with only platform-specific rows retained.
 
 ## [1.0.0] - 2026-02-18
 
