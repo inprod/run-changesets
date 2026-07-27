@@ -2,6 +2,20 @@
 
 All notable changes to `@inprod.io/run-changesets` will be documented in this file.
 
+## [1.1.1] - 2026-07-27
+
+### Security
+
+- Upgrade `js-yaml` to `^4.3.0`, resolving GHSA-52cp-r559-cp3m (YAML merge-key chains can force
+  quadratic CPU consumption). This is directly relevant here, since the package parses
+  user-supplied changeset YAML. Production dependencies now audit clean.
+
+### Changed
+
+- Upgrade `glob` to `^13.0.6`. The previous `^10` range was unsupported upstream and emitted a
+  deprecation warning on install. v13 was chosen over 11/12 because it still supports Node 18,
+  matching the declared `engines` field and the CI matrix; 11 and 12 require Node 20 or later.
+
 ## [1.1.0] - 2026-07-23
 
 ### Added

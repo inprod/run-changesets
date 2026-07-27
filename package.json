@@ -1,6 +1,6 @@
 {
   "name": "@inprod.io/run-changesets",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Run InProd changesets in CI/CD pipelines",
   "main": "src/index.js",
   "bin": {
@@ -43,8 +43,8 @@
     "node": ">=18"
   },
   "dependencies": {
-    "glob": "^10.0.0",
-    "js-yaml": "^4.1.1"
+    "glob": "^13.0.6",
+    "js-yaml": "^4.3.0"
   },
   "devDependencies": {
     "eslint": "^8.0.0",
