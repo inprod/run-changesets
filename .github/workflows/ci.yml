@@ -18,10 +18,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -35,6 +35,30 @@ jobs:
       - name: Test
         run: npm test
 
+  audit:
+    name: Production dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # --omit=dev is deliberate: only advisories that reach consumers of the
+      # published package should fail the build. eslint and jest pull in their
+      # own vulnerable transitive deps that never ship, and gating on those
+      # would make this job permanently red for reasons nobody can act on.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
   build-check:
     name: Package build check
     runs-on: ubuntu-latest
@@ -42,10 +66,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '18.x'
           cache: npm

@@ -29,7 +29,7 @@ resources:
     - repository: inprod_templates
       type: github
       name: inprod/run-changesets
-      ref: refs/tags/v1.1.0
+      ref: refs/tags/v1.1.1
       endpoint: your-github-service-connection
 
 steps:
@@ -194,7 +194,7 @@ resources:
     - repository: inprod_templates
       type: github
       name: inprod/run-changesets
-      ref: refs/tags/v1.1.0
+      ref: refs/tags/v1.1.1
       endpoint: your-github-service-connection
 
 stages:

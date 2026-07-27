@@ -210,6 +210,13 @@ Set `INPROD_DEBUG=true` as an environment variable or pipeline variable to enabl
 - Node.js 18 or later
 - npm 8 or later
 
+> **On Node 18.** Node 18 reached end-of-life in April 2025, but support is retained here
+> deliberately: CI runners in enterprise environments often lag well behind upstream, and this
+> package is a CI tool. The cost is real — it constrains which dependency majors can be adopted
+> (`glob` is pinned to v13 rather than 11 or 12 for exactly this reason, since those require Node 20
+> or later). Revisit when that constraint starts blocking a security fix; dropping Node 18 is a
+> breaking change and warrants a major version bump.
+
 ### Setup
 
 ```bash

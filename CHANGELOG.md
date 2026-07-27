@@ -2,6 +2,22 @@
 
 All notable changes to `@inprod.io/run-changesets` will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Upgrade `actions/checkout` and `actions/setup-node` to v5. The v4 releases target Node 20, which
+  GitHub has deprecated and is force-running on Node 24 during a grace period.
+- Upgrade `eslint` to v9 and migrate `.eslintrc.json` to `eslint.config.js` (flat config). The
+  previous config set parser options and enabled no rules; the port preserves that exactly.
+- Upgrade `jest` to v30.
+- CI now runs `npm audit --omit=dev --audit-level=high` as a separate job, so advisories reaching
+  consumers fail the build. Dev-only advisories are excluded deliberately — `eslint` and `jest`
+  carry vulnerable transitive dependencies that never ship, and gating on those would leave the job
+  permanently red for reasons nobody can act on.
+- Azure guide examples pin `v1.1.1`.
+- Documented that Node 18 support is a deliberate choice and what it costs in dependency currency.
+
 ## [1.1.1] - 2026-07-27
 
 ### Security
