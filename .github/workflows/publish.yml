@@ -22,7 +22,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.x'
+          node-version: '22.x'
           cache: npm
           registry-url: 'https://registry.npmjs.org'
 
@@ -49,9 +49,11 @@ jobs:
       - name: Verify package contents
         run: npm pack --dry-run
 
-      # npm >= 11.5.1 is required for trusted publishing (OIDC).
+      # npm >= 11.5.1 is required for trusted publishing (OIDC). Pinned to the 11.x
+      # range rather than @latest: npm 12 requires Node >= 22.22.2 and would break
+      # this job the moment it became latest.
       - name: Update npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@^11.5.1
 
       - name: Publish
         run: npm publish --provenance
