@@ -53,21 +53,13 @@ workflows:
 
 ## Configuration
 
-All configuration uses `INPROD_*` environment variables.
+All configuration uses `INPROD_*` environment variables. See the
+[Environment Variable Reference](https://github.com/inprod/run-changesets/blob/main/README.md#environment-variable-reference)
+in the README for the full list of variables, defaults, and descriptions.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `INPROD_API_KEY` | Yes | — | InProd API key for authentication |
-| `INPROD_BASE_URL` | Yes | — | Base URL of your InProd instance (e.g. `https://app.inprod.io`) |
-| `INPROD_CHANGESET_FILE` | Yes | — | Path to changeset file(s). Supports glob patterns (e.g. `changesets/*.yaml`) |
-| `INPROD_ENVIRONMENT` | No | `""` | Target InProd environment name or ID |
-| `INPROD_VALIDATE_BEFORE_EXECUTE` | No | `"true"` | Validate before executing. Set to `"false"` to skip |
-| `INPROD_VALIDATE_ONLY` | No | `"false"` | Only validate; do not execute |
-| `INPROD_POLLING_TIMEOUT_MINUTES` | No | `"10"` | Maximum minutes to wait for async tasks |
-| `INPROD_EXECUTION_STRATEGY` | No | `"per_file"` | `"per_file"` or `"validate_first"` |
-| `INPROD_FAIL_FAST` | No | `"false"` | Stop on first failure |
-| `INPROD_CHANGESET_VARIABLES` | No | `""` | Newline-separated `KEY=VALUE` pairs to inject into changesets |
-| `INPROD_FILES` | No | `""` | Newline-separated `VARNAME=path` pairs. Each file is uploaded to InProd's temp-file store and the returned signed URL is injected as a changeset variable |
+On CircleCI, set them either in **Project Settings → Environment Variables** (for credentials and
+anything shared across jobs) or in the `environment:` block of an individual `run` step (for
+per-job settings like `INPROD_CHANGESET_FILE`).
 
 ---
 
@@ -491,23 +483,17 @@ Set `INPROD_DEBUG: 'true'` in the `environment:` block or as a project environme
 
 ## Troubleshooting
 
+For errors common to every platform — malformed `base_url`, missing changeset files, `401`/`403`
+responses, validation failures, polling timeouts, and `INPROD_CHANGESET_VARIABLES` / `INPROD_FILES`
+format and upload errors — see the
+[Troubleshooting table](https://github.com/inprod/run-changesets/blob/main/README.md#troubleshooting)
+in the README.
+
+The following are specific to CircleCI:
+
 | Error | Cause | Fix |
 |---|---|---|
 | `api_key is required and cannot be empty` | `INPROD_API_KEY` not set | Add `INPROD_API_KEY` in Project Settings → Environment Variables |
 | `base_url is required and cannot be empty` | `INPROD_BASE_URL` not set | Add `INPROD_BASE_URL` in Project Settings → Environment Variables |
-| `Invalid base_url format` | URL is malformed | Ensure `INPROD_BASE_URL` is a valid URL (e.g. `https://app.inprod.io`) |
-| `Changeset file not found` | Path does not exist | Check `INPROD_CHANGESET_FILE` is relative to the repo root |
-| `No files matched the pattern` | Glob pattern matched nothing | Verify the glob pattern and that files are committed |
-| `Validation request failed with status 401` | Invalid or expired API key | Regenerate the API key in InProd and update `INPROD_API_KEY` |
-| `Validation request failed with status 403` | API key lacks permission | Ensure the API key has changeset execute permissions |
-| `Changeset validation failed` | Changeset has validation errors | Review the validation errors in the step log |
-| `did not complete within N seconds` | Task polling timed out | Increase `INPROD_POLLING_TIMEOUT_MINUTES` |
-| `Invalid changeset_variables format` | A line in `INPROD_CHANGESET_VARIABLES` has no `=` | Ensure every non-comment line is `KEY=VALUE` |
-| `INPROD_FILES: malformed entry "..."` | A line isn't `VARNAME=path` | Ensure every non-comment line is `VARNAME=path` |
-| `INPROD_FILES: invalid variable name "..."` | Name is too long, not a valid identifier, or reserved | Use a short identifier-style name that isn't a JS reserved word or `callback_url` |
-| `INPROD_FILES: ... file not found` / `not readable` | Path is wrong or unreadable | Check the path is relative to the repo root and the file is committed and readable |
-| `INPROD_FILES: "..." is not a valid variable — it is already declared as masked in ...` | An `INPROD_FILES` name collides with an existing masked variable in the changeset | Rename the `INPROD_FILES` variable, or remove/unmask the conflicting declaration |
-| `Temp-file upload failed: ... exceeds the server size limit` | File is larger than the server's max upload size | Reduce the file size or ask your InProd admin about `CHANGESET_TEMP_FILE_MAX_BYTES` |
-| `Temp-file upload failed for ...: HTTP ...` | Upload request failed (auth, 5xx, etc.) | Check `INPROD_API_KEY` and InProd service status |
 | Output files not found in downstream job | Workspace not persisted | Add `persist_to_workspace` in the deploy job and `attach_workspace` in the downstream job |
 | Approval jobs not triggering | `type: approval` job missing in workflow | Add a `hold` job of `type: approval` between the stages |

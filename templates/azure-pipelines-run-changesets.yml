@@ -1,0 +1,117 @@
+# InProd Run Changesets - Azure Pipelines Step Template
+# https://www.inprod.io
+#
+# Usage (reference from a GitHub repository resource):
+#
+#   resources:
+#     repositories:
+#       - repository: inprod_templates
+#         type: github
+#         name: inprod/run-changesets
+#         ref: refs/tags/v1.0.0
+#         endpoint: your-github-service-connection
+#
+#   steps:
+#     - template: templates/azure-pipelines-run-changesets.yml@inprod_templates
+#       parameters:
+#         changesetFile: changesets/queues.yaml
+#         environment: Production
+#
+# Or copy this file into your repository and reference it locally:
+#
+#   steps:
+#     - template: path/to/azure-pipelines-run-changesets.yml
+#       parameters:
+#         changesetFile: changesets/queues.yaml
+#         environment: Production
+#
+# INPROD_API_KEY and INPROD_BASE_URL must be set as secret pipeline variables
+# in your Azure DevOps project (Pipelines -> Library or pipeline settings).
+
+parameters:
+  - name: changesetFile
+    type: string
+    displayName: 'Changeset file path or glob pattern'
+
+  - name: environment
+    type: string
+    default: ''
+    displayName: 'Target InProd environment name or ID'
+
+  - name: validateBeforeExecute
+    type: boolean
+    default: true
+    displayName: 'Validate changeset before executing'
+
+  - name: validateOnly
+    type: boolean
+    default: false
+    displayName: 'Validate only (do not execute)'
+
+  - name: pollingTimeoutMinutes
+    type: number
+    default: 10
+    displayName: 'Polling timeout in minutes'
+
+  - name: executionStrategy
+    type: string
+    default: 'per_file'
+    displayName: 'Execution strategy (per_file or validate_first)'
+
+  - name: failFast
+    type: boolean
+    default: false
+    displayName: 'Stop on first failure'
+
+  - name: changesetVariables
+    type: string
+    default: ''
+    displayName: 'Newline-separated KEY=VALUE pairs to inject into changesets'
+
+  - name: nodeVersion
+    type: string
+    default: '18.x'
+    displayName: 'Node.js version'
+
+steps:
+  - task: NodeTool@0
+    displayName: 'Install Node.js ${{ parameters.nodeVersion }}'
+    inputs:
+      versionSpec: '${{ parameters.nodeVersion }}'
+
+  - script: npx --yes @inprod.io/run-changesets
+    displayName: 'Run InProd Changesets'
+    failOnStderr: false
+    env:
+      INPROD_API_KEY: $(INPROD_API_KEY)
+      INPROD_BASE_URL: $(INPROD_BASE_URL)
+      INPROD_CHANGESET_FILE: '${{ parameters.changesetFile }}'
+      INPROD_ENVIRONMENT: '${{ parameters.environment }}'
+      INPROD_VALIDATE_BEFORE_EXECUTE: '${{ parameters.validateBeforeExecute }}'
+      INPROD_VALIDATE_ONLY: '${{ parameters.validateOnly }}'
+      INPROD_POLLING_TIMEOUT_MINUTES: '${{ parameters.pollingTimeoutMinutes }}'
+      INPROD_EXECUTION_STRATEGY: '${{ parameters.executionStrategy }}'
+      INPROD_FAIL_FAST: '${{ parameters.failFast }}'
+      INPROD_CHANGESET_VARIABLES: '${{ parameters.changesetVariables }}'
+
+  - bash: |
+      if [ -f inprod-results.env ]; then
+        STATUS=$(grep '^INPROD_STATUS=' inprod-results.env | cut -d'=' -f2-)
+        echo "##vso[task.setvariable variable=INPROD_STATUS;isOutput=true]$STATUS"
+        echo "InProd status: $STATUS"
+      else
+        echo "##vso[task.setvariable variable=INPROD_STATUS;isOutput=true]UNKNOWN"
+        echo "InProd status: UNKNOWN (inprod-results.env not found)"
+      fi
+    displayName: 'PublishStatus'
+    name: PublishStatus
+    condition: always()
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'Publish inprod-result.json'
+    condition: always()
+    continueOnError: true
+    inputs:
+      targetPath: 'inprod-result.json'
+      artifact: 'inprod-result'
+      publishLocation: 'pipeline'

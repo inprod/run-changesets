@@ -8,8 +8,8 @@ Automate [Genesys Cloud](https://www.genesys.com/genesys-cloud) configuration de
 
 Deploy, validate, and manage [Genesys Cloud](https://www.genesys.com/genesys-cloud) configurations programmatically through [InProd's](https://www.inprod.io) changeset API. Build custom CI/CD pipelines with full control over deployment logic, validation gates, error handling, and environment promotion workflows for your contact center infrastructure.
 
-### Offically Supported CI/CD Platforms:
-- [GitLab CI/CD](https://docs.gitlab.com/ci/pipelines/) [See Gitlab Project](https://gitlab.com/inprod/gitlab-run-changesets)
+### Officially Supported CI/CD Platforms:
+- [GitLab CI/CD](https://docs.gitlab.com/ci/pipelines/) — [GitLab CI template project](https://gitlab.com/inprod/gitlab-run-changesets)
 - [Azure DevOps Pipelines](https://azure.microsoft.com/en-au/products/devops/pipelines)
 - [Bitbucket Pipelines](https://www.atlassian.com/software/bitbucket/features/pipelines)
 - [CircleCI](https://circleci.com/)
@@ -17,6 +17,7 @@ Deploy, validate, and manage [Genesys Cloud](https://www.genesys.com/genesys-clo
 - [GitHub Actions](https://github.com/features/actions) [See Marketplace](https://github.com/marketplace/actions/inprod-run-changesets)
 
 **Learn more:** [InProd Documentation](https://www.inprod.io) | [Genesys Cloud Platform](https://www.genesys.com/genesys-cloud)
+
 ---
 
 ## Overview
@@ -40,11 +41,11 @@ Features:
 
 | Platform | Guide |
 |---|---|
-| GitLab CI/CD | [docs/gitlab.md](docs/gitlab.md) |
-| Azure DevOps Pipelines | [docs/azure.md](docs/azure.md) |
-| Bitbucket Pipelines | [docs/bitbucket.md](docs/bitbucket.md) |
-| CircleCI | [docs/circleci.md](docs/circleci.md) |
-| Jenkins | [docs/jenkins.md](docs/jenkins.md) |
+| GitLab CI/CD | [gitlab-run-changesets project](https://gitlab.com/inprod/gitlab-run-changesets) |
+| Azure DevOps Pipelines | [docs/azure.md](https://github.com/inprod/run-changesets/blob/main/docs/azure.md) |
+| Bitbucket Pipelines | [docs/bitbucket.md](https://github.com/inprod/run-changesets/blob/main/docs/bitbucket.md) |
+| CircleCI | [docs/circleci.md](https://github.com/inprod/run-changesets/blob/main/docs/circleci.md) |
+| Jenkins | [docs/jenkins.md](https://github.com/inprod/run-changesets/blob/main/docs/jenkins.md) |
 
 ---
 
@@ -65,10 +66,13 @@ All configuration is passed via environment variables. Variables can be set at t
 | `INPROD_FAIL_FAST` | No | `"false"` | Stop processing on first failure when `"true"` |
 | `INPROD_CHANGESET_VARIABLES` | No | `""` | Newline-separated `KEY=VALUE` pairs to inject into changesets at runtime |
 | `INPROD_FILES` | No | `""` | Newline-separated `VARNAME=path` pairs. Each file is uploaded to InProd's temp-file store and the returned signed URL is injected as a changeset variable (see [File Uploads](#file-uploads)) |
+| `INPROD_DEBUG` | No | `""` | Set to `"true"` to enable verbose debug output, including API request and response details (see [Debug Logging](#debug-logging)) |
 
 ### Boolean Variables
 
 Boolean variables (`INPROD_VALIDATE_BEFORE_EXECUTE`, `INPROD_VALIDATE_ONLY`, `INPROD_FAIL_FAST`) accept the string values `"true"` or `"false"`. Any value other than `"false"` is treated as true for `INPROD_VALIDATE_BEFORE_EXECUTE`.
+
+`INPROD_DEBUG` is stricter: only the exact string `"true"` enables debug output. Any other value — including `"1"` or `"yes"` — leaves it off.
 
 ---
 
@@ -241,8 +245,10 @@ run-changesets/
 ├── src/
 │   ├── index.js          # Main entry point and all business logic
 │   └── index.test.js     # Jest test suite
-├── package.json
-├── .npmignore
+├── docs/                 # Per-platform CI/CD guides
+├── templates/            # Azure Pipelines step template
+├── package.json          # `files` allowlist controls what is published
+├── LICENSE
 └── CHANGELOG.md
 ```
 
@@ -259,6 +265,12 @@ The package is a single Node.js script (`src/index.js`) that:
 7. Exits with code `0` on success or `1` on any failure
 
 The package has no CI-platform-specific dependencies — it reads env vars, writes files, and exits, making it compatible with any CI system.
+
+---
+
+## License
+
+GPL-3.0 — see [LICENSE](https://github.com/inprod/run-changesets/blob/main/LICENSE) for the full text.
 
 ---
 
